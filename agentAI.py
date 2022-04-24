@@ -1,121 +1,129 @@
-from cgitb import small
 import torch
 import random
-from collections import deque
 import numpy as np
+from collections import deque
+from game import GameAI, Direction, Point
+from model import Linear_QNet, QTrainer
+from helper import plot
 
-from game import BLOCK_SIZE, GameAI, Direction, Point
-
-MAX_MEM = 10**6
-BATCH_SZ = 10**3
-LRATE = 10**-3
+MAX_MEMORY = 100000
+BATCH_SIZE = 1000
+LR = 0.001
 
 class Agent:
+
     def __init__(self):
         self.n_games = 0
         self.epsilon = 0
-        self.gamma = 0
-        self.memory = deque(maxlen=MAX_MEM)
-        self.model = None
-        self.trainer = None
+        self.gamma = 0.9
+        self.memory = deque(maxlen=MAX_MEMORY)
+        self.model = Linear_QNet(11, 256, 3)
+        self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
 
 
-    def getState(self, game):
+    def get_state(self, game):
         head = game.snake[0]
-        Pleft = Point(head.x - BLOCK_SIZE, head.y)
-        Pright = Point(head.x + BLOCK_SIZE, head.y)
-        Pup = Point(head.x, head.y - BLOCK_SIZE)
-        Pdown = Point(head.x, head.y + BLOCK_SIZE)
+        point_l = Point(head.x - 20, head.y)
+        point_r = Point(head.x + 20, head.y)
+        point_u = Point(head.x, head.y - 20)
+        point_d = Point(head.x, head.y + 20)
+        
+        dir_l = game.direction == Direction.LEFT
+        dir_r = game.direction == Direction.RIGHT
+        dir_u = game.direction == Direction.UP
+        dir_d = game.direction == Direction.DOWN
 
-        Dleft = game.direction == Direction.LEFT
-        Dright = game.direction == Direction.RIGHT
-        Dup = game.direction == Direction.UP
-        Ddown = game.direction == Direction.DOWN
+        state = [
+            (dir_r and game.is_collision(point_r)) or 
+            (dir_l and game.is_collision(point_l)) or 
+            (dir_u and game.is_collision(point_u)) or 
+            (dir_d and game.is_collision(point_d)),
 
-        curr_state = [
-            (Dright and game.is_collision(Pright)) or
-            (Dleft and game.is_collision(Pleft)) or
-            (Dup and game.is_collision(Pup)) or
-            (Ddown and game.is_collision(Pdown)),
+            (dir_u and game.is_collision(point_r)) or 
+            (dir_d and game.is_collision(point_l)) or 
+            (dir_l and game.is_collision(point_u)) or 
+            (dir_r and game.is_collision(point_d)),
 
-            (Dup and game.is_collision(Pright)) or
-            (Ddown and game.is_collision(Pleft)) or
-            (Dleft and game.is_collision(Pup)) or
-            (Dright and game.is_collision(Pdown)),
-
-            (Ddown and game.is_collision(Pright)) or
-            (Dup and game.is_collision(Pleft)) or
-            (Dright and game.is_collision(Pup)) or
-            (Dleft and game.is_collision(Pdown)),
-
-            Dleft,
-            Dright,
-            Dup,
-            Ddown,
+            (dir_d and game.is_collision(point_r)) or 
+            (dir_u and game.is_collision(point_l)) or 
+            (dir_r and game.is_collision(point_u)) or 
+            (dir_l and game.is_collision(point_d)),
+            
+            dir_l,
+            dir_r,
+            dir_u,
+            dir_d,
 
             game.food.x < game.head.x,
             game.food.x > game.head.x,
             game.food.y < game.head.y,
-            game.food.y > game.head.y,
-        ]
+            game.food.y > game.head.y
+            ]
 
-        return np.array(curr_state, dtype=int)
+        return np.array(state, dtype=int)
 
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append((state, action, reward, next_state, done))
 
-    def writeMemory(self, state, action, reward, next_state, ok):
-        self.memory.append((state, action, reward, next_state, ok))
-
-    def train_long_term(self):
-        if len(self.memory) > BATCH_SZ:
-            sample_small = random.sample(self.memory, BATCH_SZ)
+    def train_long_memory(self):
+        if len(self.memory) > BATCH_SIZE:
+            mini_sample = random.sample(self.memory, BATCH_SIZE)
         else:
-            sample_small = self.memory
-        
-        states, actions, rewards, next_states, oks = zip(*sample_small)
-        self.trainer.train_step(states, actions, rewards, next_states, oks)
+            mini_sample = self.memory
 
-    def train_short_term(self, state, action, reward, next_state, ok):
-        self.trainer.train_step(state, action, reward, next_state, ok)
+        states, actions, rewards, next_states, dones = zip(*mini_sample)
+        self.trainer.train_step(states, actions, rewards, next_states, dones)
 
-    def calcAction(self, state):
-        self.epsilon = 100 - self.n_games
-        final_move = [0, 0, 0]
+    def train_short_memory(self, state, action, reward, next_state, done):
+        self.trainer.train_step(state, action, reward, next_state, done)
+
+    def get_action(self, state):
+        self.epsilon = 80 - self.n_games
+        final_move = [0,0,0]
         if random.randint(0, 200) < self.epsilon:
             move = random.randint(0, 2)
             final_move[move] = 1
         else:
-            state = torch.tensor(state, dtype=torch.float)
-            prediction = self.model.predict(state)
+            state0 = torch.tensor(state, dtype=torch.float)
+            prediction = self.model(state0)
             move = torch.argmax(prediction).item()
             final_move[move] = 1
-        
+
         return final_move
 
+
 def train():
-    scores = []
-    scores_mean = []
-    score_total = 0
+    plot_scores = []
+    plot_mean_scores = []
+    total_score = 0
     record = 0
     agent = Agent()
     game = GameAI()
     while True:
-        state_old = agent.getState(game)
-        move_final = agent.calcAction(state_old)
-        reward, ok, score = game.play_step(move_final)
-        state_new = agent.getState(game)
+        state_old = agent.get_state(game)
+        final_move = agent.get_action(state_old)
 
-        agent.train_short_term(state_old, move_final, reward, state_new, ok)
-        agent.writeMemory(state_old, move_final, reward, state_new, ok)
+        reward, done, score = game.play_step(final_move)
+        state_new = agent.get_state(game)
 
-        if ok:
+        agent.train_short_memory(state_old, final_move, reward, state_new, done)
+        agent.remember(state_old, final_move, reward, state_new, done)
+
+        if done:
             game.reset()
             agent.n_games += 1
-            agent.train_long_term()
+            agent.train_long_memory()
 
             if score > record:
                 record = score
+                agent.model.save()
 
-            print(f"Game {agent.n_games} Score {score} Record {record}")
+            print(f'Game: {agent.n_games} Score: {score} Record: {record}')
+            plot_scores.append(score)
+            total_score += score
+            mean_score = total_score / agent.n_games
+            plot_mean_scores.append(mean_score)
+            plot(plot_scores, plot_mean_scores)
 
 
 if __name__ == '__main__':

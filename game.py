@@ -5,7 +5,7 @@ import numpy as np
 from collections import namedtuple
 
 pygame.init()
-font = pygame.font.SysFont('serif', 30)
+font = pygame.font.SysFont('Times New Roman', 22)
 
 class Direction(Enum):
     RIGHT = 1
@@ -22,19 +22,17 @@ BLUE1 = (0, 0, 255)
 BLUE2 = (0, 100, 255)
 BLACK = (0,0,0)
 
-BLOCK_SIZE = 15
-SPEED = 5
+BLOCK_SIZE = 20
+SPEED = 45
 
 class GameAI:
     def __init__(self, w=1080, h=720):
         self.w = w
         self.h = h
-        # init display
         self.display = pygame.display.set_mode((self.w, self.h))
         pygame.display.set_caption('Snake')
         self.clock = pygame.time.Clock()
 
-        # init game state
         self.reset()
 
     def reset(self):
@@ -61,20 +59,16 @@ class GameAI:
                 pygame.quit()
                 quit()
 
-        # Moving snake
         self._move(action)
-        # update the head
         self.snake.insert(0, self.head)
-        
-        # Checking terminal conditions
+
         reward = 0
         game_over = False
         if self.is_collision() or self.frame_iteration > 50*len(self.snake):
             game_over = True
             reward = -5
             return reward, game_over, self.score
-            
-        # 4. place new food or just move
+
         if self.head == self.food:
             self.score += 1
             reward = 5
@@ -82,20 +76,16 @@ class GameAI:
         else:
             self.snake.pop()
         
-        # 5. update ui and clock
         self._update_ui()
         self.clock.tick(SPEED)
-        # 6. return game over and score
+        
         return reward, game_over, self.score
 
     def is_collision(self, point=None):
         if point == None:
             point = self.head
-
-        # Boundary check
         if (point.x > self.w-BLOCK_SIZE) or (point.x < 0) or (point.y > self.h-BLOCK_SIZE) or (point.y < 0):
             return True
-        # Self check
         if point in self.snake[1:]:
             return True
 
